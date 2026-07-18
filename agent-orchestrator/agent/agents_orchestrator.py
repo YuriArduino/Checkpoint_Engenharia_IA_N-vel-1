@@ -13,7 +13,7 @@ from langchain_core.runnables import RunnableConfig
 
 # Correção: Agora usamos o SQLite para persistência real
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.checkpoint.base import empty_checkpoint, CheckpointMetadata
+from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata, empty_checkpoint
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -102,10 +102,16 @@ def salvar_checkpoint_manual(thread_id: str, novo_estado: Dict[str, Any]):
     e precisamos injetar esse estado manualmente no grafo.
     """
     config: RunnableConfig = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
-    checkpoint = cast(Dict[str, Any], memory.get(config) or empty_checkpoint())
 
-    # Atualiza o estado no checkpoint
-    checkpoint["channel_values"]["state"] = novo_estado
+    # Recupera snapshot atual
+    checkpoint_data = cast(Dict[str, Any], memory.get(config) or empty_checkpoint())
+
+    # Garante que channel_values exista e atualiza o estado
+    channel_values = checkpoint_data.get("channel_values", {})
+    channel_values["state"] = novo_estado
+    checkpoint_data["channel_values"] = channel_values
+
+    checkpoint = cast(Checkpoint, checkpoint_data)
 
     # Salva
     meta = cast(

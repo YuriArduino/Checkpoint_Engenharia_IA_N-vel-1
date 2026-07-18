@@ -16,7 +16,6 @@ from typing import (
     Required,
     Sequence,
     TypedDict,
-    cast,
 )
 
 import httpx
@@ -70,9 +69,9 @@ def limit_messages(
     state: ModerationState, new_messages: Sequence[BaseMessage]
 ) -> list[BaseMessage]:
     """Reduz o histórico de mensagens para os últimos 10 itens."""
-    current_messages = cast(list[BaseMessage], state.get("messages", []))
-    messages = add_messages(current_messages, new_messages)
-    return messages[-10:]
+    current_messages = list(state.get("messages", ()))
+    merged_messages = [*current_messages, *new_messages]
+    return merged_messages[-10:]
 
 
 def _normalizar_classificacao(classificacao: str) -> str:
@@ -155,8 +154,10 @@ async def node_analise_inicial(state: ModerationState) -> dict[str, Any]:
     }
 
 
-async def node_pesquisa_diretrizes(_state: ModerationState) -> dict[str, Any]:
+async def node_pesquisa_diretrizes(state: ModerationState) -> dict[str, Any]:
     """Busca regras no Tavily via BFA/MCP quando o comentário exigir revisão."""
+    # Estado recebido, atualmente não usado no placeholder.
+    _ = state
     logger.info("Pesquisando diretrizes de comunidade via Tavily/MCP.")
     return {"diretrizes_violadas": "Regra 4: Linguagem inadequada (simulação)."}
 
