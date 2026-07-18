@@ -1,0 +1,154 @@
+version: "3.8"
+
+networks:
+  ia-mesh:
+    driver: bridge
+
+volumes:
+  database_data: # Volume compartilhado para manter os arquivos .db do SQLite persistentes
+
+services:
+  # ============================================================================
+  # CAMADA DE INFRAESTRUTURA E BARRAMENTO CENTRAL (BFA)
+  # ============================================================================
+  bfa-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_ENV: bfa_service
+    image: checkpoint_ia_base:latest
+    container_name: bfa_service_hub
+    ports:
+      - "8081:8001" # Porta HTTP do BFA para a busca híbrida (FAISS + BM25 RRF)
+    volumes:
+      - .:/app
+      - database_data:/app/shared_db
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+    command: python bfa_service/app.py
+    networks:
+      - ia-mesh
+
+  # ============================================================================
+  # CAMADA DE ORQUESTRAÇÃO COGNITIVA (SUPERVISOR / LANGGRAPH / PREFECT)
+  # ============================================================================
+  agent-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_ENV: orchestrator
+    image: checkpoint_ia_base:latest
+    container_name: agent_orchestrator_supervisor
+    ports:
+      - "8080:8000" # Rota FastAPI / SSE mapeada para o Frontend React
+    volumes:
+      - .:/app
+      - database_data:/app/shared_db
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - DATABASE_URL=sqlite:////app/shared_db/mvp_database.db
+      - BFA_SERVICE_URL=bfa-service:8001
+      - ANALYST_AGENT_HOST=analyst-agent
+      - AUDITOR_AGENT_HOST=auditor-agent
+      - MODERATOR_AGENT_HOST=moderator-agent
+    working_dir: /app/agent-orchestrator
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - ia-mesh
+    depends_on:
+      - bfa-service
+
+  # ============================================================================
+  # CAMADA DE MICROSSERVIÇOS ESPECIALISTAS (MÉTODO SERVER-EXECUTOR VIA gRPC)
+  # ============================================================================
+  analyst-agent:
+    image: checkpoint_ia_base:latest
+    depends_on:
+      - agent-orchestrator
+    container_name: analyst_agent_grpc
+    ports:
+      - "5001:5001" # Porta interna gRPC mapeada
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+    command: python agents/analyst/server.py
+    networks:
+      - ia-mesh
+
+  auditor-agent:
+    image: checkpoint_ia_base:latest
+    depends_on:
+      - agent-orchestrator
+    container_name: auditor_agent_grpc
+    ports:
+      - "5002:5002" # Porta interna gRPC mapeada
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+    command: python agents/auditor/server.py
+    networks:
+      - ia-mesh
+
+  moderator-agent:
+    image: checkpoint_ia_base:latest
+    depends_on:
+      - agent-orchestrator
+    container_name: moderator_agent_grpc
+    ports:
+      - "5003:5003" # Porta interna gRPC mapeada
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+    command: python agents/moderator/server.py
+    networks:
+      - ia-mesh
+
+  # ============================================================================
+  # CAMADA DE INTERFACE GRÁFICA (REACT + AG-UI)
+  # ============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend_ag_ui_react
+    depends_on:
+      - agent-orchestrator
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules # Impede que dependências locais da máquina host sobrescrevam o container
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_INTERVAL=1000
+      - FAST_REFRESH=true
+      - REACT_APP_ORCHESTRATOR_URL=http://localhost:8080
+    command: npm start
+    networks:
+      - ia-mesh

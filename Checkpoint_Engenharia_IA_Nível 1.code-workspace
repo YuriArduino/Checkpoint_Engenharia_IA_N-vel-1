@@ -1,0 +1,98 @@
+{
+  "folders": [
+    {
+      "name": "📦 0-Project-Root",
+      "path": ".",
+    },
+    {
+      "name": "🌐 1-Frontend",
+      "path": "frontend",
+    },
+    {
+      "name": "🛡 2-Agent-Orchestrator",
+      "path": "agent-orchestrator",
+    },
+    {
+      "name": "🤖 3-Agents-Mesh",
+      "path": "agents",
+    },
+    {
+      "name": "📚 4-BFA-Service",
+      "path": "bfa_service",
+    },
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "/home/yuri/_/Projetos/Venvs/multiagentic_bank/bin/python3.12",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": [
+      "./agent-orchestrator",
+      "./agents",
+      "./bfa_service",
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "workspace",
+    "editor.formatOnSave": true,
+    "files.exclude": {
+      "**/.git": true,
+      "**/__pycache__": true,
+      "**/*.pyc": true,
+      "**/*.egg-info": true,
+      ".pytest_cache": true,
+      ".coverage": true,
+      "**/node_modules": true,
+    },
+    "terminal.integrated.tabs.enabled": true,
+    "terminal.integrated.tabs.location": "left",
+    "terminal.integrated.tabs.title": "",
+    "terminal.integrated.shellIntegration.enabled": false,
+    "terminal.integrated.defaultProfile.linux": "📦 Root",
+    "terminal.integrated.profiles.linux": {
+      "📦 Root": {
+        "path": "/bin/bash",
+        "icon": "folder",
+        "color": "terminal.ansiWhite",
+        "args": [
+          "-c",
+          "cd '${workspaceFolder}' && echo -ne '\\033]0;📦 Root\\007' && exec bash",
+        ],
+      },
+      "🌐 Frontend": {
+        "path": "/bin/bash",
+        "icon": "globe",
+        "color": "terminal.ansiCyan",
+        "args": [
+          "-c",
+          "cd '${workspaceFolder}/frontend' && echo -ne '\\033]0;🌐 Frontend\\007' && exec bash",
+        ],
+      },
+      "🛡 Orchestrator": {
+        "path": "/bin/bash",
+        "icon": "shield",
+        "color": "terminal.ansiRed",
+        "args": [
+          "-c",
+          "cd '${workspaceFolder}/agent-orchestrator' && echo -ne '\\033]0;🛡 Orchestrator\\007' && exec bash",
+        ],
+      },
+      "🤖 Agents Mesh": {
+        "path": "/bin/bash",
+        "icon": "hubot",
+        "color": "terminal.ansiGreen",
+        "args": [
+          "-c",
+          "cd '${workspaceFolder}/agents' && echo -ne '\\033]0;🤖 Agents Mesh\\007' && exec bash",
+        ],
+      },
+      "📚 BFA Service": {
+        "path": "/bin/bash",
+        "icon": "library",
+        "color": "terminal.ansiYellow",
+        "args": [
+          "-c",
+          "cd '${workspaceFolder}/bfa_service' && echo -ne '\\033]0;📚 BFA Service\\007' && exec bash",
+        ],
+      },
+    },
+  },
+}
