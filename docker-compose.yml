@@ -7,18 +7,16 @@ volumes:
 
 services:
   # ============================================================================
-  # CAMADA DE INFRAESTRUTURA E BARRAMENTO CENTRAL (BFA)
+  # SERVIÇO CONSTRUTOR: BFA (Faz o build da imagem base e roda o bfa_service)
   # ============================================================================
   bfa-service:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        BUILD_ENV: bfa_service
-    image: checkpoint_ia_bfa_service:latest
+    image: checkpoint_ia_base_image:latest # Define o nome da imagem base para os outros
     container_name: bfa_service_hub
     ports:
-      - "8081:8001" # Porta HTTP do BFA para a busca híbrida (FAISS + BM25 RRF)
+      - "8081:8001"
     volumes:
       - .:/app
       - database_data:/app/shared_db
@@ -33,18 +31,15 @@ services:
       - ia-mesh
 
   # ============================================================================
-  # CAMADA DE ORQUESTRAÇÃO COGNITIVA (SUPERVISOR / LANGGRAPH / PREFECT)
+  # SERVIÇOS QUE REUTILIZAM A IMAGEM BASE
   # ============================================================================
   agent-orchestrator:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        BUILD_ENV: orchestrator
-    image: checkpoint_ia_agent_orchestrator:latest
+    image: checkpoint_ia_base_image:latest # REUTILIZA A IMAGEM
+    depends_on:
+      - bfa-service # Garante que o BFA construa a imagem antes de subir
     container_name: agent_orchestrator_supervisor
     ports:
-      - "8080:8000" # Rota FastAPI / SSE mapeada para o Frontend React
+      - "8080:8000"
     volumes:
       - .:/app
       - database_data:/app/shared_db
@@ -65,19 +60,9 @@ services:
     command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     networks:
       - ia-mesh
-    depends_on:
-      - bfa-service
 
-  # ============================================================================
-  # CAMADA DE MICROSSERVIÇOS ESPECIALISTAS (MÉTODO SERVER-EXECUTOR VIA gRPC)
-  # ============================================================================
   analyst-agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        BUILD_ENV: agent_analyst
-    image: checkpoint_ia_agent_analyst:latest
+    image: checkpoint_ia_base_image:latest # REUTILIZA A IMAGEM
     depends_on:
       - bfa-service
     container_name: analyst_agent_grpc
@@ -96,12 +81,7 @@ services:
       - ia-mesh
 
   auditor-agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        BUILD_ENV: agent_auditor
-    image: checkpoint_ia_agent_auditor:latest
+    image: checkpoint_ia_base_image:latest # REUTILIZA A IMAGEM
     depends_on:
       - bfa-service
     container_name: auditor_agent_grpc
@@ -120,12 +100,7 @@ services:
       - ia-mesh
 
   moderator-agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        BUILD_ENV: agent_moderator
-    image: checkpoint_ia_agent_moderator:latest
+    image: checkpoint_ia_base_image:latest # REUTILIZA A IMAGEM
     depends_on:
       - bfa-service
     container_name: moderator_agent_grpc
@@ -144,7 +119,7 @@ services:
       - ia-mesh
 
   # ============================================================================
-  # CAMADA DE INTERFACE GRÁFICA (REACT + AG-UI)
+  # FRONTEND (Sem alterações)
   # ============================================================================
   frontend:
     profiles:
@@ -159,7 +134,7 @@ services:
       - "3000:3000"
     volumes:
       - ./frontend:/app
-      - /app/node_modules # Impede que dependências locais da máquina host sobrescrevam o container
+      - /app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
