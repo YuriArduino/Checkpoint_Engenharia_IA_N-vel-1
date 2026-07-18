@@ -24,7 +24,7 @@ load_dotenv()
 # O arquivo será criado na pasta do projeto
 DB_PATH = "moderation_checkpoints.db"
 connection = sqlite3.connect(DB_PATH, check_same_thread=False)
-memory = SqliteSaver(connection)
+memory: SqliteSaver = cast(SqliteSaver, SqliteSaver(connection))
 
 # ==========================================================
 # Configuração do Modelo (Analista de Moderação)
@@ -61,7 +61,10 @@ async def classificar_comentario(query: str) -> Dict[str, str]:
         }
     except json.JSONDecodeError:
         logger.warning("Resposta do LLM não estava em JSON. Texto recebido: %s", texto)
-        return {"classificacao": "neutro", "justificativa": "Não foi possível parsear a resposta do modelo."}
+        return {
+            "classificacao": "neutro",
+            "justificativa": "Não foi possível parsear a resposta do modelo.",
+        }
 
 
 # ==========================================================
@@ -75,10 +78,12 @@ async def preparar_contexto_moderacao(thread_id: str) -> Dict[str, Any]:
     Isso permite que o AG-UI saiba se o comentário está em 'análise',
     'aguardando_humano' ou 'aprovado'.
     """
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    config: RunnableConfig = cast(
+        RunnableConfig, {"configurable": {"thread_id": thread_id}}
+    )
 
     # 1. Recupera o snapshot do SQLite
-    checkpoint = memory.get(config) or empty_checkpoint()
+    checkpoint = cast(Dict[str, Any], memory.get(config) or empty_checkpoint())
 
     # 2. Extrai estado persistido
     channel_values = checkpoint.get("channel_values", {})
@@ -98,13 +103,18 @@ def salvar_checkpoint_manual(thread_id: str, novo_estado: Dict[str, Any]):
     Útil para quando o moderador humano faz uma alteração via API
     e precisamos injetar esse estado manualmente no grafo.
     """
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-    checkpoint = memory.get(config) or empty_checkpoint()
+    config: RunnableConfig = cast(
+        RunnableConfig, {"configurable": {"thread_id": thread_id}}
+    )
+    checkpoint = cast(Dict[str, Any], memory.get(config) or empty_checkpoint())
 
     # Atualiza o estado no checkpoint
     checkpoint["channel_values"]["state"] = novo_estado
 
     # Salva
-    meta = cast(CheckpointMetadata, {"source": "human_intervention", "step": 1})
+    meta = cast(
+        CheckpointMetadata,
+        {"source": "human_intervention", "step": 1},
+    )
     memory.put(config, checkpoint, metadata=meta, new_versions={})
     logger.info("Estado manualmente atualizado via moderador para thread %s", thread_id)

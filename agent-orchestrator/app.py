@@ -1,10 +1,13 @@
 """Módulo Principal (FastAPI) - Orquestrador de Moderação."""
 
 import logging
+import sqlite3
+from typing import cast
+
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langchain_core.runnables import RunnableConfig
 
 # Importa o builder e o stream do serviço
 from service import builder, executar_orquestrador_stream
@@ -38,7 +41,7 @@ async def human_decision(data: HumanInterventionRequest):
     1. Atualiza o estado com a decisão final do moderador.
     2. Resume o grafo após o breakpoint.
     """
-    config = {"configurable": {"thread_id": data.thread_id}}
+    config = cast(RunnableConfig, {"configurable": {"thread_id": data.thread_id}})
 
     # Atualiza o estado com a decisão humana e com as intervenções extras do moderador
     payload = {"decisao_final": data.nova_classificacao}

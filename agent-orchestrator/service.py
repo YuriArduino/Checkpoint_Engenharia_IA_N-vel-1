@@ -1,15 +1,17 @@
 """Módulo de Orquestração do Grafo para o Sistema de Moderação."""
 
+from __future__ import annotations
+
 import json
 import logging
 import uuid
-from typing import Annotated, Dict, Any, TypedDict, Optional, Sequence
+from typing import Annotated, AsyncGenerator, Dict, Any, TypedDict, Optional, Sequence, cast
 
 import httpx
 from pydantic import BaseModel
 from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
+from langchain_core.messages import BaseMessage
 
 from a2a.client import A2ACardResolver, create_client, ClientConfig
 from a2a.types import Message, Part, Role, SendMessageRequest
@@ -42,9 +44,13 @@ AGENTS = {
 # -----------------------------
 
 
-def limit_messages(state: "ModerationState", new_messages: Sequence[BaseMessage]) -> list[BaseMessage]:
-    # Mantém apenas as últimas 10 mensagens
-    return add_messages(state.get("messages", []), new_messages)[-10:]
+def limit_messages(state: ModerationState, new_messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+    """Reduz o histórico de mensagens para os últimos 10 itens."""
+    current_messages = cast(
+        list[BaseMessage], state.get("messages", [])
+    )
+    messages = add_messages(current_messages, new_messages)
+    return messages[-10:]
 
 
 # -----------------------------
@@ -62,6 +68,9 @@ class ModerationState(TypedDict):
     classificacao: Optional[str]
     justificativa_agente: Optional[str]
     revisao_humana_necessaria: bool
+    decisao_final: Optional[str]
+    comentario_editado: Optional[str]
+    justificativa_humana: Optional[str]
 
 
 # -----------------------------
@@ -138,7 +147,7 @@ async def node_analise_inicial(state: ModerationState) -> Dict[str, Any]:
     }
 
 
-async def node_pesquisa_diretrizes(state: ModerationState) -> Dict[str, Any]:
+async def node_pesquisa_diretrizes(_state: ModerationState) -> Dict[str, Any]:
     """Node 2: Busca regras no Tavily (via BFA/MCP) se for problemático."""
     # Aqui implementaremos a chamada MCP para o Tavily no futuro
     # Por enquanto, preenchemos um placeholder
@@ -191,21 +200,42 @@ builder.add_edge("revisao_humana", END)
 # -----------------------------
 # STREAMING DO ORQUESTRADOR (AG-UI)
 # -----------------------------
-async def executar_orquestrador_stream(input_data: Any, graph_runnable):
+def _serialize_event(event: Any) -> str:
+    if hasattr(event, "model_dump"):
+        payload = event.model_dump()
+    elif hasattr(event, "dict"):
+        payload = event.dict()
+    else:
+        payload = event.__dict__
+    serialized = json.dumps(payload)
+    serialized = serialized.replace("\n", "\ndata: ")
+    return f"data: {serialized}\n\n"
+
+
+async def executar_orquestrador_stream(
+    input_data: Any,
+    graph_runnable,
+) -> AsyncGenerator[str, None]:
     """Executa o grafo e converte a progressão em eventos visuais no AG-UI."""
     messages = input_data.messages
     comentario = messages[-1].content if messages else ""
     thread_id = getattr(input_data, "thread_id", str(uuid.uuid4()))
     assistant_id = str(uuid.uuid4())
 
-    yield TextMessageStartEvent(
-        type=EventType.TEXT_MESSAGE_START, message_id=assistant_id, role="assistant"
+    yield _serialize_event(
+        TextMessageStartEvent(
+            type=EventType.TEXT_MESSAGE_START,
+            message_id=assistant_id,
+            role="assistant",
+        )
     )
 
-    yield TextMessageContentEvent(
-        type=EventType.TEXT_MESSAGE_CONTENT,
-        message_id=assistant_id,
-        delta="Iniciando triagem do comentário...\n\n",
+    yield _serialize_event(
+        TextMessageContentEvent(
+            type=EventType.TEXT_MESSAGE_CONTENT,
+            message_id=assistant_id,
+            delta="Iniciando triagem do comentário...\n\n",
+        )
     )
 
     config = {"configurable": {"thread_id": thread_id}}
@@ -220,25 +250,38 @@ async def executar_orquestrador_stream(input_data: Any, graph_runnable):
                 f"**Classificação:** {dados['classificacao'].upper()}\n"
                 f"**Justificativa:** {dados['justificativa_agente']}\n\n"
             )
-            yield TextMessageContentEvent(
-                type=EventType.TEXT_MESSAGE_CONTENT, message_id=assistant_id, delta=delta
+            yield _serialize_event(
+                TextMessageContentEvent(
+                    type=EventType.TEXT_MESSAGE_CONTENT,
+                    message_id=assistant_id,
+                    delta=delta,
+                )
             )
 
             if dados["revisao_humana_necessaria"]:
-                yield TextMessageContentEvent(
-                    type=EventType.TEXT_MESSAGE_CONTENT,
-                    message_id=assistant_id,
-                    delta="⚠️ *Atenção: Comentário retido para revisão do moderador.* Aguardando ação.\n",
+                yield _serialize_event(
+                    TextMessageContentEvent(
+                        type=EventType.TEXT_MESSAGE_CONTENT,
+                        message_id=assistant_id,
+                        delta=(
+                            "⚠️ *Atenção: Comentário retido para revisão do moderador.* "
+                            "Aguardando ação.\n"
+                        ),
+                    )
                 )
 
         if "pesquisa_diretrizes" in output:
             regras = output["pesquisa_diretrizes"]["diretrizes_violadas"]
-            yield TextMessageContentEvent(
-                type=EventType.TEXT_MESSAGE_CONTENT,
-                message_id=assistant_id,
-                delta=f"**Diretrizes Mapeadas (Tavily):** {regras}\n\n",
+            yield _serialize_event(
+                TextMessageContentEvent(
+                    type=EventType.TEXT_MESSAGE_CONTENT,
+                    message_id=assistant_id,
+                    delta=f"**Diretrizes Mapeadas (Tavily):** {regras}\n\n",
+                )
             )
 
-        yield StateUpdateEvent(state=output)
+        yield _serialize_event(StateUpdateEvent(state=output))
 
-    yield TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_id)
+    yield _serialize_event(
+        TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_id)
+    )
