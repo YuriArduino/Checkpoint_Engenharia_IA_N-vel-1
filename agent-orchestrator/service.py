@@ -156,7 +156,6 @@ async def node_analise_inicial(state: ModerationState) -> dict[str, Any]:
 
 async def node_pesquisa_diretrizes(state: ModerationState) -> dict[str, Any]:
     """Busca regras no Tavily via BFA/MCP quando o comentário exigir revisão."""
-    # Estado recebido, atualmente não usado no placeholder.
     _ = state
     logger.info("Pesquisando diretrizes de comunidade via Tavily/MCP.")
     return {"diretrizes_violadas": "Regra 4: Linguagem inadequada (simulação)."}

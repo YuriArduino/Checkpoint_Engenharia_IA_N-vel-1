@@ -1,10 +1,12 @@
 """Módulo Supervisor de Moderação - Orquestração e Estado Persistente."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import sqlite3
-from typing import Any, Dict, cast
+from typing import Any, cast
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -37,7 +39,7 @@ __llm = ChatOpenAI(model=model_name, temperature=0.0)
 # ==========================================================
 
 
-async def classificar_comentario(query: str) -> Dict[str, str]:
+async def classificar_comentario(query: str) -> dict[str, str]:
     """Analisa o comentário para definir se precisa de intervenção humana."""
     prompt = f"""
     Analise o seguinte comentário de um aluno e classifique-o:
@@ -72,7 +74,7 @@ async def classificar_comentario(query: str) -> Dict[str, str]:
 # ==========================================================
 
 
-async def preparar_contexto_moderacao(thread_id: str) -> Dict[str, Any]:
+async def preparar_contexto_moderacao(thread_id: str) -> dict[str, Any]:
     """
     Recupera o estado atual da thread no SQLite para o Frontend.
     Isso permite que o AG-UI saiba se o comentário está em 'análise',
@@ -81,7 +83,7 @@ async def preparar_contexto_moderacao(thread_id: str) -> Dict[str, Any]:
     config: RunnableConfig = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
 
     # 1. Recupera o snapshot do SQLite
-    checkpoint = cast(Dict[str, Any], memory.get(config) or empty_checkpoint())
+    checkpoint = cast(dict[str, Any], memory.get(config) or empty_checkpoint())
 
     # 2. Extrai estado persistido
     channel_values = checkpoint.get("channel_values", {})
@@ -96,21 +98,16 @@ async def preparar_contexto_moderacao(thread_id: str) -> Dict[str, Any]:
 # ==========================================================
 
 
-def salvar_checkpoint_manual(thread_id: str, novo_estado: Dict[str, Any]):
+def salvar_checkpoint_manual(thread_id: str, novo_estado: dict[str, Any]) -> None:
     """
     Útil para quando o moderador humano faz uma alteração via API
     e precisamos injetar esse estado manualmente no grafo.
     """
     config: RunnableConfig = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
+    checkpoint_data = cast(dict[str, Any], memory.get(config) or empty_checkpoint())
 
-    # Recupera snapshot atual
-    checkpoint_data = cast(Dict[str, Any], memory.get(config) or empty_checkpoint())
-
-    # Garante que channel_values exista e atualiza o estado
-    channel_values = checkpoint_data.get("channel_values", {})
-    channel_values["state"] = novo_estado
-    checkpoint_data["channel_values"] = channel_values
-
+    # Atualiza o estado no checkpoint
+    checkpoint_data["channel_values"]["state"] = novo_estado
     checkpoint = cast(Checkpoint, checkpoint_data)
 
     # Salva
