@@ -1,5 +1,3 @@
-version: "3.8"
-
 networks:
   ia-mesh:
     driver: bridge
@@ -74,12 +72,17 @@ services:
   # CAMADA DE MICROSSERVIÇOS ESPECIALISTAS (MÉTODO SERVER-EXECUTOR VIA gRPC)
   # ============================================================================
   analyst-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_ENV: agent_analyst
     image: checkpoint_ia_base:latest
     depends_on:
-      - agent-orchestrator
+      - bfa-service
     container_name: analyst_agent_grpc
     ports:
-      - "5001:5001" # Porta interna gRPC mapeada
+      - "5001:5001"
     volumes:
       - .:/app
     env_file:
@@ -93,12 +96,17 @@ services:
       - ia-mesh
 
   auditor-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_ENV: agent_auditor
     image: checkpoint_ia_base:latest
     depends_on:
-      - agent-orchestrator
+      - bfa-service
     container_name: auditor_agent_grpc
     ports:
-      - "5002:5002" # Porta interna gRPC mapeada
+      - "5002:5002"
     volumes:
       - .:/app
     env_file:
@@ -112,12 +120,17 @@ services:
       - ia-mesh
 
   moderator-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_ENV: agent_moderator
     image: checkpoint_ia_base:latest
     depends_on:
-      - agent-orchestrator
+      - bfa-service
     container_name: moderator_agent_grpc
     ports:
-      - "5003:5003" # Porta interna gRPC mapeada
+      - "5003:5003"
     volumes:
       - .:/app
     env_file:
