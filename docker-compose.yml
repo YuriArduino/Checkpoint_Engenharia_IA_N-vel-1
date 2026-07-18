@@ -15,7 +15,7 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_ENV: bfa_service
-    image: checkpoint_ia_base:latest
+    image: checkpoint_ia_bfa_service:latest
     container_name: bfa_service_hub
     ports:
       - "8081:8001" # Porta HTTP do BFA para a busca híbrida (FAISS + BM25 RRF)
@@ -41,7 +41,7 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_ENV: orchestrator
-    image: checkpoint_ia_base:latest
+    image: checkpoint_ia_agent_orchestrator:latest
     container_name: agent_orchestrator_supervisor
     ports:
       - "8080:8000" # Rota FastAPI / SSE mapeada para o Frontend React
@@ -77,7 +77,7 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_ENV: agent_analyst
-    image: checkpoint_ia_base:latest
+    image: checkpoint_ia_agent_analyst:latest
     depends_on:
       - bfa-service
     container_name: analyst_agent_grpc
@@ -101,7 +101,7 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_ENV: agent_auditor
-    image: checkpoint_ia_base:latest
+    image: checkpoint_ia_agent_auditor:latest
     depends_on:
       - bfa-service
     container_name: auditor_agent_grpc
@@ -125,7 +125,7 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_ENV: agent_moderator
-    image: checkpoint_ia_base:latest
+    image: checkpoint_ia_agent_moderator:latest
     depends_on:
       - bfa-service
     container_name: moderator_agent_grpc

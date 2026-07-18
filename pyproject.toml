@@ -43,6 +43,7 @@ orchestrator = [
     "langchain",
     "langgraph>=0.1.0",
     "langgraph-checkpoint-sqlite>=2.0.0", # Essencial para o MVP com SQLite
+    "aiosqlite",
     "langchain-openai",
     "langchain-community",
     "langgraph-checkpoint-sqlite",
@@ -56,6 +57,7 @@ bfa_service = [
     "httpx",
     "python-dotenv",
     "a2a-sdk",
+    "langchain-openai",
     "rank-bm25",
     "numpy",
     "faiss-cpu",                    # Busca semântica densa
@@ -64,6 +66,7 @@ bfa_service = [
 # Agente 1: Análise semântica e comportamental inicial
 agent_analyst = [
     "a2a-sdk[http-server]",
+    "mcp",
     "langchain-mcp-adapters",
     "httpx",
     "uvicorn",
@@ -75,6 +78,7 @@ agent_analyst = [
 # Agente 2: Auditoria de políticas e diretrizes (Consome o Smithery)
 agent_auditor = [
     "a2a-sdk[http-server]",
+    "mcp",
     "langchain-mcp-adapters",
     "httpx",
     "uvicorn",
@@ -86,6 +90,7 @@ agent_auditor = [
 # Agente 3: Consolidador de vereditos e recomendações
 agent_moderator = [
     "a2a-sdk[http-server]",
+    "mcp",
     "langchain-mcp-adapters",
     "httpx",
     "uvicorn",

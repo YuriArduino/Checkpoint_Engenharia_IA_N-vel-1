@@ -1,17 +1,17 @@
 """Aplicação FastAPI raiz para testar o orquestrador sem depender do frontend."""
 
+from contextlib import asynccontextmanager
 import importlib
 import logging
 import os
-import sqlite3
 import sys
-from typing import Any, cast
+from typing import Any, AsyncIterator, cast
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 ROOT_DIR = os.path.dirname(__file__)
 AG_ORCHESTRATOR_DIR = os.path.join(ROOT_DIR, "agent-orchestrator")
@@ -29,7 +29,21 @@ ChatRequest = _schemas.ChatRequest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("moderation.root_app")
 
-app = FastAPI(title="Moderation Orchestrator AI")
+DB_PATH = os.getenv("MODERATION_CHECKPOINT_DB", "moderation_checkpoints.db")
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
+    """Mantém o checkpointer assíncrono aberto durante o ciclo de vida da API."""
+    async with AsyncSqliteSaver.from_conn_string(DB_PATH) as checkpointer:
+        app_instance.state.graph = builder.compile(
+            checkpointer=checkpointer,
+            interrupt_before=["revisao_humana"],
+        )
+        yield
+
+
+app = FastAPI(title="Moderation Orchestrator AI", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
@@ -37,11 +51,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-DB_PATH = os.getenv("MODERATION_CHECKPOINT_DB", "moderation_checkpoints.db")
-connection = sqlite3.connect(DB_PATH, check_same_thread=False)
-checkpointer = SqliteSaver(connection)
-graph = builder.compile(checkpointer=checkpointer, interrupt_before=["revisao_humana"])
 
 
 def _build_human_payload(data: HumanInterventionRequest) -> dict[str, Any]:
@@ -61,11 +70,15 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/human-decision")
-async def human_decision(data: HumanInterventionRequest) -> dict[str, str]:
+async def human_decision(request: Request, data: HumanInterventionRequest) -> dict[str, str]:
     """Atualiza o estado com a decisão humana e resume o grafo pausado."""
     config = cast(RunnableConfig, {"configurable": {"thread_id": data.thread_id}})
-    graph.update_state(config, _build_human_payload(data), as_node="revisao_humana")
-    await graph.ainvoke(None, config)
+    await request.app.state.graph.aupdate_state(
+        config,
+        _build_human_payload(data),
+        as_node="revisao_humana",
+    )
+    await request.app.state.graph.ainvoke(None, config)
 
     logger.info("Decisão humana aplicada na thread: %s", data.thread_id)
     return {"status": "success", "message": "Intervenção processada e fluxo concluído."}
@@ -73,9 +86,9 @@ async def human_decision(data: HumanInterventionRequest) -> dict[str, str]:
 
 @app.post("/")
 @app.post("/stream")
-async def moderation_endpoint(input_data: ChatRequest) -> StreamingResponse:
+async def moderation_endpoint(request: Request, data: ChatRequest) -> StreamingResponse:
     """Endpoint SSE para executar a moderação de comentários sem frontend."""
     return StreamingResponse(
-        executar_orquestrador_stream(input_data, graph),
+        executar_orquestrador_stream(data, request.app.state.graph),
         media_type="text/event-stream",
     )
