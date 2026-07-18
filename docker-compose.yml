@@ -57,7 +57,9 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
       - DATABASE_URL=sqlite:////app/shared_db/mvp_database.db
+      - MODERATION_CHECKPOINT_DB=/app/shared_db/moderation_checkpoints.db
       - BFA_SERVICE_URL=bfa-service:8001
+      - ANALYST_AGENT_URL=http://analyst-agent:5001
       - ANALYST_AGENT_HOST=analyst-agent
       - AUDITOR_AGENT_HOST=auditor-agent
       - MODERATOR_AGENT_HOST=moderator-agent
@@ -132,6 +134,8 @@ services:
   # CAMADA DE INTERFACE GRÁFICA (REACT + AG-UI)
   # ============================================================================
   frontend:
+    profiles:
+      - frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile

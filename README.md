@@ -23,10 +23,31 @@ Este projeto implementa um fluxo de trabalho avançado multiagente para moderaç
 
 1. Clone o repositório
 2. Copie o arquivo de ambientes: `cp .env.example .env` e preencha suas chaves de API.
-3. Suba todo o ecossistema de containers:
+3. Para testar somente backend/agentes, sem frontend:
    ```bash
-   docker-compose up --build
+   docker compose build
+   docker compose up bfa-service agent-orchestrator analyst-agent auditor-agent moderator-agent
    ```
+4. Para subir também o frontend React/ag-ui, use o profile `frontend`:
+   ```bash
+   docker compose --profile frontend up --build
+   ```
+
+### Teste rápido sem frontend
+
+Com os containers de backend em execução, valide pelo terminal ou Insomnia:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Para abrir o stream SSE do orquestrador:
+
+```bash
+curl -N -X POST http://localhost:8080/stream \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Este curso é ótimo, obrigado!","thread_id":"teste-local-1"}'
+```
 
 ## 🧠 Fluxo de Estado e Intervenção Humana (Human-in-the-Loop)
 
