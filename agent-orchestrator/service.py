@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from types import SimpleNamespace
 from typing import Annotated, AsyncGenerator, Dict, Any, TypedDict, Optional, Sequence, cast
 
 import httpx
@@ -44,11 +45,11 @@ AGENTS = {
 # -----------------------------
 
 
-def limit_messages(state: ModerationState, new_messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+def limit_messages(
+    state: ModerationState, new_messages: Sequence[BaseMessage]
+) -> list[BaseMessage]:
     """Reduz o histórico de mensagens para os últimos 10 itens."""
-    current_messages = cast(
-        list[BaseMessage], state.get("messages", [])
-    )
+    current_messages = cast(list[BaseMessage], state.get("messages", []))
     messages = add_messages(current_messages, new_messages)
     return messages[-10:]
 
@@ -217,7 +218,13 @@ async def executar_orquestrador_stream(
     graph_runnable,
 ) -> AsyncGenerator[str, None]:
     """Executa o grafo e converte a progressão em eventos visuais no AG-UI."""
-    messages = input_data.messages
+    if hasattr(input_data, "messages"):
+        messages = input_data.messages
+    elif hasattr(input_data, "message"):
+        messages = [SimpleNamespace(content=getattr(input_data, "message"))]
+    else:
+        messages = []
+
     comentario = messages[-1].content if messages else ""
     thread_id = getattr(input_data, "thread_id", str(uuid.uuid4()))
     assistant_id = str(uuid.uuid4())

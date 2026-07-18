@@ -1,27 +1,31 @@
 """Aplicação FastAPI para o Orquestrador de Moderação de Conteúdo."""
 
+import importlib
 import logging
+import os
+import sqlite3
+import sys
 from typing import cast
-import httpx
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-# Importando o builder e o stream do serviço de moderação
-from service import builder, executar_orquestrador_stream
-from schemas import HumanInterventionRequest, ChatRequest
+# Torna o pacote agent-orchestrator importável a partir da raiz do projeto
+ROOT_DIR = os.path.dirname(__file__)
+AG_ORCHESTRATOR_DIR = os.path.join(ROOT_DIR, "agent-orchestrator")
+if AG_ORCHESTRATOR_DIR not in sys.path:
+    sys.path.insert(0, AG_ORCHESTRATOR_DIR)
 
-# Importações da AG-UI
-from ag_ui.core import (
-    RunAgentInput,
-    EventType,
-    RunStartedEvent,
-    RunFinishedEvent,
-    BaseEvent,
-)
-from ag_ui.encoder import EventEncoder
+_service = importlib.import_module("service")
+_schemas = importlib.import_module("schemas")
+
+builder = _service.builder
+executar_orquestrador_stream = _service.executar_orquestrador_stream
+HumanInterventionRequest = _schemas.HumanInterventionRequest
+ChatRequest = _schemas.ChatRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("moderation.app")
@@ -38,7 +42,8 @@ app.add_middleware(
 
 # 1. Configuração de Persistência SQLite
 # Criamos o banco de checkpoints especificamente para o fluxo de moderação
-checkpointer = SqliteSaver.from_conn_string("moderation_checkpoints.db")
+connection = sqlite3.connect("moderation_checkpoints.db", check_same_thread=False)
+checkpointer = SqliteSaver(connection)
 
 # 2. Compilação do Grafo com Interrupção (HitL)
 # O grafo pausa antes de executar o nó 'revisao_humana', esperando ação humana.
@@ -52,15 +57,18 @@ async def human_decision(data: HumanInterventionRequest):
     1. Atualiza o estado persistido com a decisão do moderador.
     2. Resume o fluxo do grafo.
     """
-    config = {"configurable": {"thread_id": data.thread_id}}
+    config = cast(RunnableConfig, {"configurable": {"thread_id": data.thread_id}})
 
     # Atualiza o estado do grafo no ponto de interrupção
+    payload = {"decisao_final": data.nova_classificacao}
+    if data.nova_justificativa:
+        payload["justificativa_humana"] = data.nova_justificativa
+    if data.comentario_editado:
+        payload["comentario_editado"] = data.comentario_editado
+
     graph.update_state(
         config,
-        {
-            "decisao_final": data.nova_classificacao,
-            "justificativa_agente": data.nova_justificativa or "Intervenção humana.",
-        },
+        payload,
         as_node="revisao_humana",
     )
 
@@ -73,51 +81,11 @@ async def human_decision(data: HumanInterventionRequest):
 
 
 @app.post("/")
-async def moderation_endpoint(input_data: RunAgentInput, request: Request):
-    """Endpoint SSE para a AG-UI executar a moderação."""
-    accept_header = request.headers.get("accept") or "text/event-stream"
-    encoder = EventEncoder(accept=accept_header)
+async def moderation_endpoint(input_data: ChatRequest):
+    """Endpoint SSE para executar a moderação de comentários."""
 
     async def event_generator():
-        try:
-            # 1. Sinaliza início da execução na UI
-            yield encoder.encode(
-                cast(
-                    BaseEvent,
-                    RunStartedEvent(
-                        type=EventType.RUN_STARTED,
-                        thread_id=input_data.thread_id,
-                        run_id=input_data.run_id,
-                    ),
-                )
-            )
+        async for event in executar_orquestrador_stream(input_data, graph):
+            yield event
 
-            # 2. Injeta o grafo compilado no fluxo de stream
-            async for event in executar_orquestrador_stream(input_data, graph):
-                yield encoder.encode(cast(BaseEvent, event))
-
-            # 3. Sinaliza fim da execução
-            yield encoder.encode(
-                cast(
-                    BaseEvent,
-                    RunFinishedEvent(
-                        type=EventType.RUN_FINISHED,
-                        thread_id=input_data.thread_id,
-                        run_id=input_data.run_id,
-                    ),
-                )
-            )
-        except Exception as e:
-            logger.error("Erro no fluxo de moderação: %s", e, exc_info=True)
-            yield encoder.encode(
-                cast(
-                    BaseEvent,
-                    RunFinishedEvent(
-                        type=EventType.RUN_FINISHED,
-                        thread_id=input_data.thread_id,
-                        run_id=input_data.run_id,
-                    ),
-                )
-            )
-
-    return StreamingResponse(event_generator(), media_type=encoder.get_content_type())
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
