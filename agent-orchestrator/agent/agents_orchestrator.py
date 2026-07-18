@@ -78,9 +78,7 @@ async def preparar_contexto_moderacao(thread_id: str) -> Dict[str, Any]:
     Isso permite que o AG-UI saiba se o comentário está em 'análise',
     'aguardando_humano' ou 'aprovado'.
     """
-    config: RunnableConfig = cast(
-        RunnableConfig, {"configurable": {"thread_id": thread_id}}
-    )
+    config: RunnableConfig = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
 
     # 1. Recupera o snapshot do SQLite
     checkpoint = cast(Dict[str, Any], memory.get(config) or empty_checkpoint())
@@ -103,9 +101,7 @@ def salvar_checkpoint_manual(thread_id: str, novo_estado: Dict[str, Any]):
     Útil para quando o moderador humano faz uma alteração via API
     e precisamos injetar esse estado manualmente no grafo.
     """
-    config: RunnableConfig = cast(
-        RunnableConfig, {"configurable": {"thread_id": thread_id}}
-    )
+    config: RunnableConfig = cast(RunnableConfig, {"configurable": {"thread_id": thread_id}})
     checkpoint = cast(Dict[str, Any], memory.get(config) or empty_checkpoint())
 
     # Atualiza o estado no checkpoint

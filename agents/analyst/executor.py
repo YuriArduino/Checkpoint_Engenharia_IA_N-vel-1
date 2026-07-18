@@ -38,15 +38,12 @@ class CommentaryAnalysisExecutor(AgentExecutor):
 
         if not result_dict:
             desc_erro = "Falha interna. Comentário classificado como neutro por segurança."
-            # Mantém a assinatura 'structured_response' exigida pela arquitetura v1.0
             result_dict = {
-                "structured_response": {
-                    "classificacao": "neutro",
-                    "analise_do_agente": desc_erro,
-                }
+                "classificacao": "neutro",
+                "analise_do_agente": desc_erro,
             }
 
-        response_payload = json.dumps(result_dict, ensure_ascii=False)
+        response_payload = json.dumps({"structured_response": result_dict}, ensure_ascii=False)
 
         # 3. Consistência de Enums (A2A v1.0)
         agent_message = new_text_message(

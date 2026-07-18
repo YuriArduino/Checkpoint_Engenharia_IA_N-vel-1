@@ -1,48 +1,69 @@
-"""Módulo de Orquestração do Grafo para o Sistema de Moderação."""
+"""Módulo de orquestração do grafo para o sistema de moderação."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from types import SimpleNamespace
-from typing import Annotated, AsyncGenerator, Dict, Any, TypedDict, Optional, Sequence, cast
+from typing import (
+    Annotated,
+    Any,
+    AsyncGenerator,
+    NotRequired,
+    Optional,
+    Required,
+    Sequence,
+    TypedDict,
+    cast,
+)
 
 import httpx
-from pydantic import BaseModel
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage
-
-from a2a.client import A2ACardResolver, create_client, ClientConfig
-from a2a.types import Message, Part, Role, SendMessageRequest
+from a2a.client import A2ACardResolver, ClientConfig, create_client
 from a2a.helpers import get_stream_response_text
-
-# Eventos do AG-UI
+from a2a.types import Message, Part, Role, SendMessageRequest
 from ag_ui.core import (
     EventType,
-    TextMessageStartEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
+    TextMessageStartEvent,
 )
+from langchain_core.messages import BaseMessage
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from pydantic import BaseModel
 
 logger = logging.getLogger("moderation.orchestrator")
 
 HTTPX_CLIENT = httpx.AsyncClient(timeout=30)
-CLIENT_CACHE: Dict[str, Any] = {}
+CLIENT_CACHE: dict[str, Any] = {}
 
-# -----------------------------
-# REGISTRY DE AGENTES / BFA
-# -----------------------------
-# Em um ambiente 100% dinâmico, o BFA entregaria essa URL.
-# Para o orquestrador, já mapeamos a porta 5001 exposta no server.py do Analista.
 AGENTS = {
-    "analyst": "http://analyst-agent:5001",
+    "analyst": os.getenv("ANALYST_AGENT_URL", "http://analyst-agent:5001"),
 }
 
-# -----------------------------
-# PRESERVAR CONTEXTO HISTÓRICO
-# -----------------------------
+
+class ModerationState(TypedDict):
+    """Estado persistente do fluxo de moderação no LangGraph."""
+
+    messages: NotRequired[Annotated[Sequence[BaseMessage], add_messages]]
+    comentario_original: Required[str]
+    classificacao: NotRequired[Optional[str]]
+    justificativa_agente: NotRequired[Optional[str]]
+    revisao_humana_necessaria: NotRequired[bool]
+    diretrizes_violadas: NotRequired[Optional[str]]
+    decisao_final: NotRequired[Optional[str]]
+    comentario_editado: NotRequired[Optional[str]]
+    comentario_final: NotRequired[Optional[str]]
+    justificativa_humana: NotRequired[Optional[str]]
+
+
+class StateUpdateEvent(BaseModel):
+    """Evento de atualização de estado enviado ao frontend AG-UI."""
+
+    type: str = "STATE_UPDATE"
+    state: dict[str, Any]
 
 
 def limit_messages(
@@ -54,41 +75,44 @@ def limit_messages(
     return messages[-10:]
 
 
-# -----------------------------
-# STATE DO LANGGRAPH (MODERAÇÃO)
-# -----------------------------
-class ModerationState(TypedDict):
-    """Estado persistente com gestão de histórico."""
-
-    # add_messages aqui atua como o reducer.
-    # Você pode configurar max_messages ou usar uma função customizada.
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-
-    # Seus campos de controle continuam aqui
-    comentario_original: str
-    classificacao: Optional[str]
-    justificativa_agente: Optional[str]
-    revisao_humana_necessaria: bool
-    decisao_final: Optional[str]
-    comentario_editado: Optional[str]
-    justificativa_humana: Optional[str]
+def _normalizar_classificacao(classificacao: str) -> str:
+    """Normaliza variações de classificação usadas pelos agentes especialistas."""
+    normalized = classificacao.strip().lower().replace("_", " ")
+    if normalized in {"problematico", "problemático", "potencialmente problemático"}:
+        return "potencialmente problemático"
+    if normalized in {"positivo", "neutro"}:
+        return normalized
+    return "neutro"
 
 
-# -----------------------------
-# EVENTO PARA STATE UPDATE NO AG-UI
-# -----------------------------
-class StateUpdateEvent(BaseModel):
-    """Evento de atualização de estado enviado ao Frontend UI."""
+def _extrair_structured_response(texto_resposta: str) -> dict[str, str]:
+    """Extrai a resposta estruturada do envelope A2A retornado pelo agente."""
+    try:
+        resultado = json.loads(texto_resposta)
+    except json.JSONDecodeError:
+        logger.error("Falha ao decodificar JSON do agente: %s", texto_resposta)
+        return {
+            "classificacao": "neutro",
+            "analise_do_agente": "Erro de parse. Fallback para neutro.",
+        }
 
-    type: str = "STATE_UPDATE"
-    state: dict
+    if isinstance(resultado, dict) and isinstance(resultado.get("structured_response"), dict):
+        resultado = resultado["structured_response"]
+
+    if not isinstance(resultado, dict):
+        return {
+            "classificacao": "neutro",
+            "analise_do_agente": "Resposta do agente não veio em formato de objeto.",
+        }
+
+    return {
+        "classificacao": str(resultado.get("classificacao", "neutro")),
+        "analise_do_agente": str(resultado.get("analise_do_agente", "")),
+    }
 
 
-# -----------------------------
-# CHAMADA PARA O AGENTE ANALISTA (A2A v1.0)
-# -----------------------------
-async def request_analyst_agent(message: str, agent_url: str) -> Dict[str, str]:
-    """Chama o Analyst Agent e realiza o parse do output estruturado (JSON)."""
+async def request_analyst_agent(message: str, agent_url: str) -> dict[str, str]:
+    """Chama o Analyst Agent via A2A e parseia seu output estruturado."""
     if agent_url not in CLIENT_CACHE:
         logger.info("Descobrindo AgentCard em %s", agent_url)
         resolver = A2ACardResolver(httpx_client=HTTPX_CLIENT, base_url=agent_url)
@@ -113,66 +137,44 @@ async def request_analyst_agent(message: str, agent_url: str) -> Dict[str, str]:
             if texto:
                 texto_resposta += texto
 
-    # O agente Analista devolve um JSON na resposta de texto
-    try:
-        resultado = json.loads(texto_resposta)
-        # Retorna o dicionário contendo "classificacao" e "analise_do_agente"
-        return resultado.get("structured_response", {})
-    except json.JSONDecodeError:
-        logger.error("Falha ao decodificar JSON do agente: %s", texto_resposta)
-        return {
-            "classificacao": "neutro",
-            "analise_do_agente": "Erro de parse. Fallback para neutro.",
-        }
+    return _extrair_structured_response(texto_resposta)
 
 
-# -----------------------------
-# NODES DO GRAFO
-# -----------------------------
-async def node_analise_inicial(state: ModerationState) -> Dict[str, Any]:
-    """Node 1: Envia o comentário para o Analyst Agent classificar."""
+async def node_analise_inicial(state: ModerationState) -> dict[str, Any]:
+    """Envia o comentário para o Analyst Agent classificar."""
     comentario = state["comentario_original"]
-    logger.info("Enviando para análise semântica...")
+    logger.info("Enviando comentário para análise semântica.")
 
     resultado = await request_analyst_agent(comentario, AGENTS["analyst"])
-
-    classificacao = resultado.get("classificacao", "neutro")
-    justificativa = resultado.get("analise_do_agente", "")
-
-    precisa_revisao = classificacao == "potencialmente problemático"
+    classificacao = _normalizar_classificacao(resultado.get("classificacao", "neutro"))
 
     return {
         "classificacao": classificacao,
-        "justificativa_agente": justificativa,
-        "revisao_humana_necessaria": precisa_revisao,
+        "justificativa_agente": resultado.get("analise_do_agente", ""),
+        "revisao_humana_necessaria": classificacao == "potencialmente problemático",
     }
 
 
-async def node_pesquisa_diretrizes(_state: ModerationState) -> Dict[str, Any]:
-    """Node 2: Busca regras no Tavily (via BFA/MCP) se for problemático."""
-    # Aqui implementaremos a chamada MCP para o Tavily no futuro
-    # Por enquanto, preenchemos um placeholder
-    logger.info("Pesquisando diretrizes de comunidade (Tavily/MCP)...")
-    return {"diretrizes_violadas": "Regra 4: Linguagem inadequada (Simulação)"}
+async def node_pesquisa_diretrizes(_state: ModerationState) -> dict[str, Any]:
+    """Busca regras no Tavily via BFA/MCP quando o comentário exigir revisão."""
+    logger.info("Pesquisando diretrizes de comunidade via Tavily/MCP.")
+    return {"diretrizes_violadas": "Regra 4: Linguagem inadequada (simulação)."}
 
 
-async def node_revisao_humana(state: ModerationState) -> Dict[str, Any]:
-    """Node 3 (HitL): Ponto de parada. Se chegar aqui, o humano interveio."""
+async def node_revisao_humana(state: ModerationState) -> dict[str, Any]:
+    """Ponto de retomada após intervenção do moderador humano."""
     logger.info("Retomando fluxo após intervenção do moderador.")
-    resultado: Dict[str, Any] = {"decisao_final": state.get("decisao_final")}
+    resultado: dict[str, Any] = {"decisao_final": state.get("decisao_final")}
 
     if state.get("comentario_editado"):
-        resultado["comentario_final"] = state["comentario_editado"]
+        resultado["comentario_final"] = state.get("comentario_editado")
 
     if state.get("justificativa_humana"):
-        resultado["justificativa_humana"] = state["justificativa_humana"]
+        resultado["justificativa_humana"] = state.get("justificativa_humana")
 
     return resultado
 
 
-# -----------------------------
-# ROTEAMENTO CONDICIONAL
-# -----------------------------
 def roteamento_pos_analise(state: ModerationState) -> str:
     """Decide se o fluxo exige pesquisa de diretrizes e revisão humana."""
     if state.get("revisao_humana_necessaria"):
@@ -180,9 +182,6 @@ def roteamento_pos_analise(state: ModerationState) -> str:
     return END
 
 
-# -----------------------------
-# BUILD DO GRAFO
-# -----------------------------
 builder = StateGraph(ModerationState)
 builder.add_node("analise_inicial", node_analise_inicial)
 builder.add_node("pesquisa_diretrizes", node_pesquisa_diretrizes)
@@ -193,31 +192,24 @@ builder.add_conditional_edges("analise_inicial", roteamento_pos_analise)
 builder.add_edge("pesquisa_diretrizes", "revisao_humana")
 builder.add_edge("revisao_humana", END)
 
-# O grafo não é compilado aqui, pois precisamos passar o checkpointer (SQLite)
-# na inicialização da aplicação (geralmente no app.py)
-# graph = builder.compile(checkpointer=memory)
 
-
-# -----------------------------
-# STREAMING DO ORQUESTRADOR (AG-UI)
-# -----------------------------
 def _serialize_event(event: Any) -> str:
+    """Serializa eventos AG-UI no formato SSE."""
     if hasattr(event, "model_dump"):
         payload = event.model_dump()
     elif hasattr(event, "dict"):
         payload = event.dict()
     else:
         payload = event.__dict__
-    serialized = json.dumps(payload)
-    serialized = serialized.replace("\n", "\ndata: ")
+
+    serialized = json.dumps(payload, ensure_ascii=False).replace("\n", "\ndata: ")
     return f"data: {serialized}\n\n"
 
 
 async def executar_orquestrador_stream(
-    input_data: Any,
-    graph_runnable,
+    input_data: Any, graph_runnable: Any
 ) -> AsyncGenerator[str, None]:
-    """Executa o grafo e converte a progressão em eventos visuais no AG-UI."""
+    """Executa o grafo e converte a progressão em eventos visuais AG-UI."""
     if hasattr(input_data, "messages"):
         messages = input_data.messages
     elif hasattr(input_data, "message"):
@@ -226,7 +218,7 @@ async def executar_orquestrador_stream(
         messages = []
 
     comentario = messages[-1].content if messages else ""
-    thread_id = getattr(input_data, "thread_id", str(uuid.uuid4()))
+    thread_id = getattr(input_data, "thread_id", None) or str(uuid.uuid4())
     assistant_id = str(uuid.uuid4())
 
     yield _serialize_event(
@@ -236,7 +228,6 @@ async def executar_orquestrador_stream(
             role="assistant",
         )
     )
-
     yield _serialize_event(
         TextMessageContentEvent(
             type=EventType.TEXT_MESSAGE_CONTENT,
@@ -246,11 +237,13 @@ async def executar_orquestrador_stream(
     )
 
     config = {"configurable": {"thread_id": thread_id}}
+    initial_state = {
+        "comentario_original": comentario,
+        "revisao_humana_necessaria": False,
+        "decisao_final": None,
+    }
 
-    # Executa o grafo com stream_mode="updates" para ver a saída de cada Node
-    async for output in graph_runnable.astream(
-        {"comentario_original": comentario}, config=config, stream_mode="updates"
-    ):
+    async for output in graph_runnable.astream(initial_state, config=config, stream_mode="updates"):
         if "analise_inicial" in output:
             dados = output["analise_inicial"]
             delta = (
@@ -271,8 +264,8 @@ async def executar_orquestrador_stream(
                         type=EventType.TEXT_MESSAGE_CONTENT,
                         message_id=assistant_id,
                         delta=(
-                            "⚠️ *Atenção: Comentário retido para revisão do moderador.* "
-                            "Aguardando ação.\n"
+                            "⚠️ *Comentário retido para revisão do moderador.* "
+                            "Aguardando ação humana.\n"
                         ),
                     )
                 )

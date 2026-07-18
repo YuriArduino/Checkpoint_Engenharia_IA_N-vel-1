@@ -1,19 +1,18 @@
-"""Aplicação FastAPI para o Orquestrador de Moderação de Conteúdo."""
+"""Aplicação FastAPI raiz para testar o orquestrador sem depender do frontend."""
 
 import importlib
 import logging
 import os
 import sqlite3
 import sys
-from typing import cast
+from typing import Any, cast
 
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-# Torna o pacote agent-orchestrator importável a partir da raiz do projeto
 ROOT_DIR = os.path.dirname(__file__)
 AG_ORCHESTRATOR_DIR = os.path.join(ROOT_DIR, "agent-orchestrator")
 if AG_ORCHESTRATOR_DIR not in sys.path:
@@ -28,52 +27,44 @@ HumanInterventionRequest = _schemas.HumanInterventionRequest
 ChatRequest = _schemas.ChatRequest
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("moderation.app")
+logger = logging.getLogger("moderation.root_app")
 
 app = FastAPI(title="Moderation Orchestrator AI")
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 1. Configuração de Persistência SQLite
-# Criamos o banco de checkpoints especificamente para o fluxo de moderação
-connection = sqlite3.connect("moderation_checkpoints.db", check_same_thread=False)
+DB_PATH = os.getenv("MODERATION_CHECKPOINT_DB", "moderation_checkpoints.db")
+connection = sqlite3.connect(DB_PATH, check_same_thread=False)
 checkpointer = SqliteSaver(connection)
-
-# 2. Compilação do Grafo com Interrupção (HitL)
-# O grafo pausa antes de executar o nó 'revisao_humana', esperando ação humana.
 graph = builder.compile(checkpointer=checkpointer, interrupt_before=["revisao_humana"])
 
 
-@app.post("/human-decision")
-async def human_decision(data: HumanInterventionRequest):
-    """
-    Endpoint de Intervenção Humana (HitL).
-    1. Atualiza o estado persistido com a decisão do moderador.
-    2. Resume o fluxo do grafo.
-    """
-    config = cast(RunnableConfig, {"configurable": {"thread_id": data.thread_id}})
-
-    # Atualiza o estado do grafo no ponto de interrupção
-    payload = {"decisao_final": data.nova_classificacao}
+def _build_human_payload(data: HumanInterventionRequest) -> dict[str, Any]:
+    """Monta somente os campos editáveis enviados pelo moderador humano."""
+    payload: dict[str, Any] = {"decisao_final": data.nova_classificacao}
     if data.nova_justificativa:
         payload["justificativa_humana"] = data.nova_justificativa
     if data.comentario_editado:
         payload["comentario_editado"] = data.comentario_editado
+    return payload
 
-    graph.update_state(
-        config,
-        payload,
-        as_node="revisao_humana",
-    )
 
-    # Resume a execução do grafo após o breakpoint
-    # O valor None indica que estamos retomando o estado atual
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Health check simples para Docker Compose e testes locais."""
+    return {"status": "ok"}
+
+
+@app.post("/human-decision")
+async def human_decision(data: HumanInterventionRequest) -> dict[str, str]:
+    """Atualiza o estado com a decisão humana e resume o grafo pausado."""
+    config = cast(RunnableConfig, {"configurable": {"thread_id": data.thread_id}})
+    graph.update_state(config, _build_human_payload(data), as_node="revisao_humana")
     await graph.ainvoke(None, config)
 
     logger.info("Decisão humana aplicada na thread: %s", data.thread_id)
@@ -81,11 +72,10 @@ async def human_decision(data: HumanInterventionRequest):
 
 
 @app.post("/")
-async def moderation_endpoint(input_data: ChatRequest):
-    """Endpoint SSE para executar a moderação de comentários."""
-
-    async def event_generator():
-        async for event in executar_orquestrador_stream(input_data, graph):
-            yield event
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+@app.post("/stream")
+async def moderation_endpoint(input_data: ChatRequest) -> StreamingResponse:
+    """Endpoint SSE para executar a moderação de comentários sem frontend."""
+    return StreamingResponse(
+        executar_orquestrador_stream(input_data, graph),
+        media_type="text/event-stream",
+    )

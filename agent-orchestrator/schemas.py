@@ -1,6 +1,7 @@
 """Schemas Pydantic para o Orquestrador de Moderação de Conteúdo."""
 
 from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
