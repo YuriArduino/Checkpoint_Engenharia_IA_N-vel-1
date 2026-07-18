@@ -10,7 +10,7 @@ from a2a.server.agent_execution.context import RequestContext
 from a2a.server.events.event_queue import EventQueue
 from a2a.types import Role, UnsupportedOperationError
 
-from .agent.commentary_analysis import run_analyst_agent
+from .agent.commentary_analysis import run_analysis_agent
 
 logger = logging.getLogger("a2a.commentary_analysis_executor")
 
@@ -31,16 +31,17 @@ class CommentaryAnalysisExecutor(AgentExecutor):
         logger.info("thread_id processado: %s", thread_id)
 
         try:
-            result_dict = await run_analyst_agent(comentario_original=comentario_aluno)
-        except RuntimeError as e:
-            logger.error("Falha cognitiva ou de rede no agente: %s", e)
+            result_dict = await run_analysis_agent(comentario_original=comentario_aluno)
+        except Exception as e:
+            logger.exception("Erro executando run_analysis_agent: %s", e)
             result_dict = None
 
         if not result_dict:
             desc_erro = "Falha interna. Comentário classificado como neutro por segurança."
             result_dict = {
-                "classificacao": "neutro",
-                "analise_do_agente": desc_erro,
+                "sentimento": "neutro",
+                "intencao": "neutro",
+                "analise_detalhada": desc_erro,
             }
 
         response_payload = json.dumps({"structured_response": result_dict}, ensure_ascii=False)

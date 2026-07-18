@@ -35,9 +35,6 @@ class PesquisadorOutput(BaseModel):
     )
 
 
-# Acopla a saída estruturada diretamente na LLM conforme as diretrizes
-__llm_structured = __llm.with_structured_output(PesquisadorOutput)
-
 client = MultiServerMCPClient(
     {  # type: ignore
         "bfa_gateway": {
@@ -65,6 +62,7 @@ async def build_researcher_agent():
     _CACHE["agente"] = create_agent(
         model=__llm,
         tools=tools,
+        response_format=PesquisadorOutput,
         system_prompt=("""
             Você é o Agente Pesquisador de Políticas de uma plataforma de cursos.
             Você receberá uma 'classificacao' e uma 'analise_do_agente'.

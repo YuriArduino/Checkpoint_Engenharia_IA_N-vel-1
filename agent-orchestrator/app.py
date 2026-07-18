@@ -3,34 +3,39 @@
 from contextlib import asynccontextmanager
 import logging
 import os
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+# Importação dos schemas estruturados do frontend
 from schemas import ChatRequest, HumanInterventionRequest
-from service import builder, executar_orquestrador_stream
 
-logger = logging.getLogger("moderation.app")
+# CORREGIDO: Importa a inteligência e os wrappers do módulo real service.py
+from service import (
+    builder,
+    executar_orquestrador_stream,
+    aplicar_intervencao_humana,
+    preparar_contexto_moderacao,
+)
 
-DB_PATH = os.getenv("MODERATION_CHECKPOINT_DB", "moderation_checkpoints.db")
+logger = logging.getLogger("orchestrator.app")
 
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
-    """Mantém o checkpointer assíncrono aberto durante o ciclo de vida da API."""
-    async with AsyncSqliteSaver.from_conn_string(DB_PATH) as checkpointer:
-        app_instance.state.graph = builder.compile(
-            checkpointer=checkpointer,
-            interrupt_before=["revisao_humana"],
-        )
-        yield
+    """Injeta o grafo pré-compilado (builder) no estado global da API."""
+    logger.info("[Orchestrator] Inicializando Gateway de Orquestração...")
+
+    # Acopla a esteira linear configurada com a persistência do SQLite do MVP
+    app_instance.state.graph = builder
+    yield
+    logger.info("[Orchestrator] Encerrando Gateway de Orquestração.")
 
 
 app = FastAPI(title="Orquestrador de Moderação AI", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
@@ -40,42 +45,47 @@ app.add_middleware(
 )
 
 
-def _build_human_payload(data: HumanInterventionRequest) -> dict[str, Any]:
-    """Monta somente os campos que o moderador alterou no estado."""
-    payload: dict[str, Any] = {"decisao_final": data.nova_classificacao}
-    if data.nova_justificativa:
-        payload["justificativa_humana"] = data.nova_justificativa
-    if data.comentario_editado:
-        payload["comentario_editado"] = data.comentario_editado
-    return payload
-
-
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Health check do orquestrador."""
-    return {"status": "ok"}
+    """Health check do orquestrador para monitoramento do Docker Compose."""
+    return {"status": "ok", "service": "agent_orchestrator"}
 
 
-@app.post("/")
 @app.post("/stream")
 async def stream_moderation(request: Request, data: ChatRequest) -> StreamingResponse:
     """Inicia a análise do comentário e emite eventos SSE compatíveis com AG-UI."""
+    logger.info("[API] Nova requisição de comentário para thread: %s", data.thread_id)
+
     return StreamingResponse(
         executar_orquestrador_stream(data, request.app.state.graph),
         media_type="text/event-stream",
     )
 
 
-@app.post("/human-decision")
-async def human_decision(request: Request, data: HumanInterventionRequest) -> dict[str, str]:
-    """Atualiza a decisão humana no checkpoint e resume o grafo pausado."""
-    config = cast(RunnableConfig, {"configurable": {"thread_id": data.thread_id}})
-    await request.app.state.graph.aupdate_state(
-        config,
-        _build_human_payload(data),
-        as_node="revisao_humana",
-    )
-    await request.app.state.graph.ainvoke(None, config)
+@app.get("/thread/{thread_id}")
+async def obter_estado_thread(thread_id: str) -> dict[str, Any]:
+    """Retorna o snapshot completo de variáveis do SQLite para o painel React."""
+    snapshot = await preparar_contexto_moderacao(thread_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Thread não localizada na base do MVP.")
+    return snapshot
 
-    logger.info("Decisão humana aplicada na thread: %s", data.thread_id)
-    return {"status": "success", "message": "Intervenção processada e fluxo concluído."}
+
+@app.post("/human-decision")
+async def human_decision(data: HumanInterventionRequest) -> dict[str, str]:
+    """Atualiza a decisão humana no checkpoint e resume o grafo pausado."""
+    logger.info("[API] Intervenção manual recebida para thread: %s", data.thread_id)
+
+    payload_humano = {
+        "nova_classificacao": data.nova_classificacao,
+        "nova_justificativa": data.nova_justificativa,
+        "comentario_editado": data.comentario_editado,
+    }
+
+    try:
+        # Aciona o gerenciador do service que atualiza o SQLite e roda o fluxo até o END
+        await aplicar_intervencao_humana(data.thread_id, payload_humano)
+        return {"status": "success", "message": "Intervenção processada e fluxo concluído."}
+    except Exception as e:
+        logger.error("[API] Falha ao processar liberação da barreira humana: %s", e)
+        raise HTTPException(status_code=500, detail="Erro interno ao destravar o fluxo.")

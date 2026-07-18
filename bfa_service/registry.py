@@ -14,8 +14,8 @@ from pydantic import SecretStr
 from langchain_openai import OpenAIEmbeddings
 
 # Imports absolutos para evitar conflitos de top-level
-from database import save_skill
-from discovery import run_global_scan
+from .database import save_skill
+from .discovery import run_global_scan
 
 logger = logging.getLogger("bfa.registry")
 
@@ -27,6 +27,7 @@ embedder = OpenAIEmbeddings(
     model=os.getenv("EMBEDDING_MODEL", "text-embedding-all-minilm-l6-v2-embedding"),
     base_url=os.getenv("OPENAI_BASE_URL", "http://host.docker.internal:1234/v1"),
     api_key=SecretStr(os.getenv("OPENAI_API_KEY", "lm-studio")),
+    check_embedding_ctx_length=False,
 )
 
 # Catálogo em memória e estruturas globais dos índices

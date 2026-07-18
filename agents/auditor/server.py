@@ -1,6 +1,8 @@
 """Server do agente pesquisador de políticas (Auditor Agent)."""
 
 from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
 from mcp.server.fastmcp import FastMCP
 
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
@@ -11,8 +13,8 @@ from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill, AgentInterface
 
 # RESOLVIDO: Imports absolutos ancorados na raiz do container do agente
-from executor import PolicyAuditExecutor
-from metadata import AUDITOR_SKILL_DESC, AUDITOR_CARD_DESC
+from .executor import PolicyAuditExecutor
+from .metadata import AUDITOR_SKILL_DESC, AUDITOR_CARD_DESC
 
 # ============================================================================
 # 1. SERVIDOR MCP INTERNO DO AGENTE (Federated MCP Isolation)
@@ -79,17 +81,32 @@ handler = DefaultRequestHandler(
 card_routes = create_agent_card_routes(agent_card=agent_card)
 rpc_routes = create_jsonrpc_routes(request_handler=handler, rpc_url="/rpc")
 
-# 1. Método oficial da SDK (mcp.server.fastmcp) para expor a aplicação ASGI
+# Método oficial da SDK (mcp.server.fastmcp) para expor a aplicação ASGI
 mcp_asgi = mcp_server.sse_app()
 
-# 2. Definição do roteamento unificado do Starlette carregando o ciclo de vida (lifespan)
+
+# RESOLVIDO: O prefixo '_' elimina os alertas de Unused Argument do Pylint/Pylance
+async def get_tools(_request):
+    """Retorna a lista de ferramentas disponíveis no Auditor Agent."""
+    return JSONResponse(
+        {
+            "tools": [
+                {
+                    "name": "get_auditor_metadata",
+                    "description": "Auditor v1.0: Focado em cruzamento e validação de diretrizes da comunidade.",
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                }
+            ]
+        }
+    )
+
+
 app = Starlette(
     routes=[
         *card_routes,
         *rpc_routes,
+        Route("/mcp/tools", get_tools, methods=["GET"]),
     ],
     lifespan=mcp_asgi.router.lifespan_context,
 )
-
-# 3. Acopla o sub-aplicativo MCP na rota esperada pelo AgentCard
 app.mount("/mcp", mcp_asgi)

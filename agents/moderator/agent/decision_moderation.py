@@ -71,6 +71,7 @@ async def build_revisor_agent():
     _CACHE["agente"] = create_agent(
         model=__llm,
         tools=tools,
+        response_format=RevisorOutput,
         system_prompt=("""
             Você é o Agente Revisor de uma plataforma de cursos online.
             Você receberá a 'analise_do_agente' e as 'politicas_relevantes'.

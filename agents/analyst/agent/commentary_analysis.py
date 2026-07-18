@@ -14,7 +14,7 @@ load_dotenv()
 
 model_name = os.getenv("CHAT_MODEL") or "gpt-4o-mini"
 
-# LLM instanciada com configuração limpa
+# LLM instanciada com configuração limpa (sem bind_tools ou with_structured_output)
 __llm = ChatOpenAI(
     model=model_name,
     temperature=float(os.getenv("CHAT_TEMPERATURE", "0.0")),
@@ -23,22 +23,24 @@ __llm = ChatOpenAI(
 
 
 # 1. Contrato de Saída Rígido
-class AnalisadorOutput(BaseModel):
-    """Schema estrito para o output cognitivo estruturado do Analista."""
+class CommentaryAnalysisOutput(BaseModel):
+    """Schema estrito para o output da análise de comentários."""
 
-    classificacao: str = Field(
+    sentimento: str = Field(
         ...,
-        description="Classificação estrita: 'positivo', 'neutro' ou 'potencialmente problemático'.",
+        description="Sentimento geral: 'positivo', 'negativo' ou 'neutro'.",
     )
-    analise_do_agente: str = Field(
+    intencao: str = Field(
         ...,
-        description="Justificativa do teor do texto (ex: se parece spam, ofensivo, dúvida, etc.).",
+        description="Intenção principal: 'dúvida', 'reclamação', 'elogio', 'sugestão' etc.",
+    )
+    analise_detalhada: str = Field(
+        ...,
+        description=("Análise completa e justificativa da classificação."),
     )
 
 
-# Acopla a saída estruturada diretamente na LLM conforme as diretrizes
-__llm_structured = __llm.with_structured_output(AnalisadorOutput)
-
+# Cliente MCP para ferramentas (type: ignore para contornar verificação de tipo de Connection)
 client = MultiServerMCPClient(
     {  # type: ignore
         "bfa_gateway": {
@@ -51,7 +53,7 @@ client = MultiServerMCPClient(
 _CACHE: Dict[str, Optional[Any]] = {"agente": None}
 
 
-async def build_analyst_agent():
+async def build_commentary_agent():
     """Instancia o agente de forma puramente funcional, sem checkpointer local."""
     if _CACHE["agente"] is not None:
         return _CACHE["agente"]
@@ -62,35 +64,42 @@ async def build_analyst_agent():
         print(f"[Aviso] Não foi possível conectar ao BFA/MCP no momento: {e}")
         tools = []
 
-    # 2. Inicialização via factory unificada
+    # 2. Inicialização via factory unificada – CORREÇÃO AQUI
+    #    Passamos __llm (BaseChatModel), NÃO um Runnable.
     _CACHE["agente"] = create_agent(
-        model=__llm,
+        model=__llm,  # <-- modelo puro
         tools=tools,
+        response_format=CommentaryAnalysisOutput,  # saída estruturada
         system_prompt=("""
-            Você é o Agente Analisador de uma plataforma de cursos online.
-            Sua única função é ler o comentário original e extrair o contexto.
+            Você é um analista de comentários de uma plataforma de cursos online.
+            Sua tarefa é analisar o comentário fornecido e retornar um parecer estruturado.
 
             TAREFAS OBRIGATÓRIAS:
-            1. Definir a classificação: 'positivo', 'neutro' ou 'potencialmente problemático'.
-            2. Escrever a justificativa diagnóstica do teor do texto.
+            1. Classificar o sentimento (positivo, negativo ou neutro).
+            2. Identificar a intenção principal do comentário.
+            3. Fornecer uma análise detalhada que justifique as classificações.
 
             REGRAS DE OURO:
-            - VOCÊ NÃO MODERA NEM DECIDE NADA. Faça apenas a leitura clínica.
+            - Seja preciso e direto.
+            - Baseie sua análise exclusivamente no conteúdo do comentário.
         """),
     )
     return _CACHE["agente"]
 
 
-async def run_analyst_agent(comentario_original: str) -> Dict[str, str]:
-    """Passada Única de Inferência: Sem manter histórico na camada do agente."""
-    agent = await build_analyst_agent()
+async def run_analysis_agent(
+    comentario_original: str, _thread_id: Optional[str] = None
+) -> Dict[str, str]:
+    agent = await build_commentary_agent()
 
-    resultado = await agent.ainvoke({"messages": [HumanMessage(content=comentario_original)]})
+    input_text = f"Comentário a analisar: {comentario_original}"
 
-    # 4. Captura o dado parseado na chave exigida pela arquitetura
-    structured_response: AnalisadorOutput = resultado["structured_response"]
+    # O ainvoke roda limpo sem o configurable interno de memória local
+    resultado = await agent.ainvoke({"messages": [HumanMessage(content=input_text)]})
 
+    structured_response: CommentaryAnalysisOutput = resultado["structured_response"]
     return {
-        "classificacao": structured_response.classificacao,
-        "analise_do_agente": structured_response.analise_do_agente,
+        "sentimento": structured_response.sentimento,
+        "intencao": structured_response.intencao,
+        "analise_detalhada": structured_response.analise_detalhada,
     }

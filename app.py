@@ -1,49 +1,45 @@
-"""Aplicação FastAPI raiz para testar o orquestrador sem depender do frontend."""
+"""Aplicação FastAPI raiz para testar o orquestrador de forma global."""
 
 from contextlib import asynccontextmanager
-import importlib
 import logging
 import os
 import sys
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+# 1. Ajusta o sys.path para o Python mapear a pasta interna do orquestrador
 ROOT_DIR = os.path.dirname(__file__)
 AG_ORCHESTRATOR_DIR = os.path.join(ROOT_DIR, "agent-orchestrator")
 if AG_ORCHESTRATOR_DIR not in sys.path:
     sys.path.insert(0, AG_ORCHESTRATOR_DIR)
 
-_service = importlib.import_module("service")
-_schemas = importlib.import_module("schemas")
-
-builder = _service.builder
-executar_orquestrador_stream = _service.executar_orquestrador_stream
-HumanInterventionRequest = _schemas.HumanInterventionRequest
-ChatRequest = _schemas.ChatRequest
+# 2. Imports absolutos limpos (Agora que o sys.path conhece a pasta de dentro)
+from schemas import ChatRequest, HumanInterventionRequest
+from service import (
+    builder,
+    executar_orquestrador_stream,
+    aplicar_intervencao_humana,
+    preparar_contexto_moderacao,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("moderation.root_app")
 
-DB_PATH = os.getenv("MODERATION_CHECKPOINT_DB", "moderation_checkpoints.db")
-
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
-    """Mantém o checkpointer assíncrono aberto durante o ciclo de vida da API."""
-    async with AsyncSqliteSaver.from_conn_string(DB_PATH) as checkpointer:
-        app_instance.state.graph = builder.compile(
-            checkpointer=checkpointer,
-            interrupt_before=["revisao_humana"],
-        )
-        yield
+    """Injeta o grafo pré-compilado (builder) no estado global da API de teste."""
+    logger.info("[Root App] Inicializando Gateway de Testes Local...")
+    app_instance.state.graph = builder
+    yield
+    logger.info("[Root App] Encerrando Gateway de Testes.")
 
 
-app = FastAPI(title="Moderation Orchestrator AI", lifespan=lifespan)
+app = FastAPI(title="Moderation Orchestrator AI (Root Test Environment)", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
@@ -53,42 +49,38 @@ app.add_middleware(
 )
 
 
-def _build_human_payload(data: HumanInterventionRequest) -> dict[str, Any]:
-    """Monta somente os campos editáveis enviados pelo moderador humano."""
-    payload: dict[str, Any] = {"decisao_final": data.nova_classificacao}
-    if data.nova_justificativa:
-        payload["justificativa_humana"] = data.nova_justificativa
-    if data.comentario_editado:
-        payload["comentario_editado"] = data.comentario_editado
-    return payload
-
-
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Health check simples para Docker Compose e testes locais."""
-    return {"status": "ok"}
-
-
-@app.post("/human-decision")
-async def human_decision(request: Request, data: HumanInterventionRequest) -> dict[str, str]:
-    """Atualiza o estado com a decisão humana e resume o grafo pausado."""
-    config = cast(RunnableConfig, {"configurable": {"thread_id": data.thread_id}})
-    await request.app.state.graph.aupdate_state(
-        config,
-        _build_human_payload(data),
-        as_node="revisao_humana",
-    )
-    await request.app.state.graph.ainvoke(None, config)
-
-    logger.info("Decisão humana aplicada na thread: %s", data.thread_id)
-    return {"status": "success", "message": "Intervenção processada e fluxo concluído."}
+    return {"status": "ok", "environment": "root_test"}
 
 
 @app.post("/")
 @app.post("/stream")
 async def moderation_endpoint(request: Request, data: ChatRequest) -> StreamingResponse:
-    """Endpoint SSE para executar a moderação de comentários sem frontend."""
     return StreamingResponse(
         executar_orquestrador_stream(data, request.app.state.graph),
         media_type="text/event-stream",
     )
+
+
+@app.get("/thread/{thread_id}")
+async def obter_estado_thread_test(thread_id: str) -> dict[str, Any]:
+    snapshot = await preparar_contexto_moderacao(thread_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Thread não localizada.")
+    return snapshot
+
+
+@app.post("/human-decision")
+async def human_decision(data: HumanInterventionRequest) -> dict[str, str]:
+    payload_humano = {
+        "nova_classificacao": data.nova_classificacao,
+        "nova_justificativa": data.nova_justificativa,
+        "comentario_editado": data.comentario_editado,
+    }
+    try:
+        await aplicar_intervencao_humana(data.thread_id, payload_humano)
+        return {"status": "success", "message": "Intervenção processada com sucesso."}
+    except Exception as e:
+        logger.error("[Root App] Falha ao liberar barreira: %s", e)
+        raise HTTPException(status_code=500, detail=f"Erro interno ao destravar o fluxo: {e}")

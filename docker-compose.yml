@@ -26,7 +26,7 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
-    command: python bfa_service/app.py
+    command: uvicorn bfa_service.app:app --host 0.0.0.0 --port 8001
     networks:
       - ia-mesh
 
@@ -76,7 +76,7 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
-    command: python agents/analyst/server.py
+    command: uvicorn agents.analyst.server:app --host 0.0.0.0 --port 5001
     networks:
       - ia-mesh
 
@@ -95,7 +95,7 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
-    command: python agents/auditor/server.py
+    command: uvicorn agents.auditor.server:app --host 0.0.0.0 --port 5002
     networks:
       - ia-mesh
 
@@ -114,7 +114,7 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
-    command: python agents/moderator/server.py
+    command: uvicorn agents.moderator.server:app --host 0.0.0.0 --port 5003
     networks:
       - ia-mesh
 

@@ -1,6 +1,8 @@
 """Server do agente revisor de decisões (Moderator Agent)."""
 
 from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
 from mcp.server.fastmcp import FastMCP
 
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
@@ -11,13 +13,12 @@ from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill, AgentInterface
 
 # RESOLVIDO: Imports absolutos ancorados na raiz do container do agente
-from executor import DecisionModerationExecutor
-from metadata import MODERATOR_SKILL_DESC, MODERATOR_CARD_DESC
+from .executor import DecisionModerationExecutor
+from .metadata import MODERATOR_SKILL_DESC, MODERATOR_CARD_DESC
 
 # ============================================================================
 # 1. SERVIDOR MCP INTERNO DO AGENTE (Federated MCP Isolation)
 # ============================================================================
-# O agente encapsula suas próprias capacidades sem depender de um hub de recursos
 mcp_server = FastMCP("ModeratorInternalTools")
 
 
@@ -54,12 +55,10 @@ agent_card = AgentCard(
     default_input_modes=["text"],
     default_output_modes=["text"],
     supported_interfaces=[
-        # Interface 1: Ponto de entrada para o Orquestrador via gRPC/JSONRPC (Porta 5003)
         AgentInterface(
             url="http://moderator-agent:5003/rpc",
             protocol_binding="JSONRPC",
         ),
-        # Interface 2: Ponto de descoberta para o BFA extrair o schema do FastMCP
         AgentInterface(
             url="http://moderator-agent:5003/mcp",
             protocol_binding="MCP_HTTP",
@@ -79,17 +78,31 @@ handler = DefaultRequestHandler(
 card_routes = create_agent_card_routes(agent_card=agent_card)
 rpc_routes = create_jsonrpc_routes(request_handler=handler, rpc_url="/rpc")
 
-# 1. Método oficial da SDK (mcp.server.fastmcp) para expor a aplicação ASGI
+# Método oficial da SDK (mcp.server.fastmcp) para expor a aplicação ASGI
 mcp_asgi = mcp_server.sse_app()
 
-# 2. Definição do roteamento unificado do Starlette carregando o ciclo de vida (lifespan)
+
+async def get_tools(_request):
+    """Retorna a lista de ferramentas disponíveis para o Moderator (Agent Reviewer)."""
+    return JSONResponse(
+        {
+            "tools": [
+                {
+                    "name": "get_moderator_metadata",
+                    "description": "Moderator v1.0: Consolidated moderation and policy enforcement agent.",
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                }
+            ]
+        }
+    )
+
+
 app = Starlette(
     routes=[
         *card_routes,
         *rpc_routes,
+        Route("/mcp/tools", get_tools, methods=["GET"]),
     ],
     lifespan=mcp_asgi.router.lifespan_context,
 )
-
-# 3. Acopla o sub-aplicativo MCP na rota esperada pelo AgentCard
 app.mount("/mcp", mcp_asgi)
